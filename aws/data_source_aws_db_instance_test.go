@@ -100,5 +100,5 @@ func testAccAWSDBInstanceDataSourceConfig_ec2Classic(rInt int) string {
 data "aws_db_instance" "bar" {
   db_instance_identifier = aws_db_instance.bar.identifier
 }
-`, testAccAWSDBInstanceConfigEc2Classic(rInt))
+`, testAccAWSDBInstanceConfig_Ec2Classic(rInt))
 }
