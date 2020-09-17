@@ -59,6 +59,28 @@ func TestAccAWSNeptuneOrderableDbInstanceDataSource_preferred(t *testing.T) {
 	})
 }
 
+func TestAccAWSNeptuneOrderableDbInstanceDataSource_defaultOnly(t *testing.T) {
+	dataSourceName := "data.aws_neptune_orderable_db_instance.test"
+	preferredOption := "db.r4.2xlarge"
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t); testAccPreCheckAWSNeptuneOrderableDbInstance(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: nil,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSNeptuneOrderableDbInstanceDataSourceDefaultOnlyConfig(preferredOption),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(dataSourceName, "engine", "neptune"),
+					resource.TestCheckResourceAttrSet(dataSourceName, "engine_version"),
+					resource.TestCheckResourceAttr(dataSourceName, "license_model", "amazon-license"),
+					resource.TestCheckResourceAttr(dataSourceName, "instance_class", preferredOption),
+				),
+			},
+		},
+	})
+}
+
 func testAccPreCheckAWSNeptuneOrderableDbInstance(t *testing.T) {
 	conn := testAccProvider.Meta().(*AWSClient).neptuneconn
 
@@ -102,4 +124,16 @@ data "aws_neptune_orderable_db_instance" "test" {
   ]
 }
 `, engine, version, license, preferredOption)
+}
+
+func testAccAWSNeptuneOrderableDbInstanceDataSourceDefaultOnlyConfig(preferredOption string) string {
+	return fmt.Sprintf(`
+data "aws_neptune_orderable_db_instance" "test" {
+  preferred_instance_classes = [
+    "db.xyz.xlarge",
+    %q,
+    "db.t3.small",
+  ]
+}
+`, preferredOption)
 }

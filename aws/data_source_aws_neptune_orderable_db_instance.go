@@ -19,15 +19,10 @@ func dataSourceAwsNeptuneOrderableDbInstance() *schema.Resource {
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 
-			"instance_class": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-
 			"engine": {
 				Type:     schema.TypeString,
-				Required: true,
+				Optional: true,
+				Default:  "neptune",
 			},
 
 			"engine_version": {
@@ -36,10 +31,17 @@ func dataSourceAwsNeptuneOrderableDbInstance() *schema.Resource {
 				Computed: true,
 			},
 
+			"instance_class": {
+				Type:          schema.TypeString,
+				Optional:      true,
+				Computed:      true,
+				ConflictsWith: []string{"preferred_instance_classes"},
+			},
+
 			"license_model": {
 				Type:     schema.TypeString,
 				Optional: true,
-				Computed: true,
+				Default:  "amazon-license",
 			},
 
 			"max_iops_per_db_instance": {
@@ -78,9 +80,10 @@ func dataSourceAwsNeptuneOrderableDbInstance() *schema.Resource {
 			},
 
 			"preferred_instance_classes": {
-				Type:     schema.TypeList,
-				Optional: true,
-				Elem:     &schema.Schema{Type: schema.TypeString},
+				Type:          schema.TypeList,
+				Optional:      true,
+				Elem:          &schema.Schema{Type: schema.TypeString},
+				ConflictsWith: []string{"instance_class"},
 			},
 
 			"read_replica_capable": {
@@ -142,6 +145,22 @@ func dataSourceAwsNeptuneOrderableDbInstanceRead(d *schema.ResourceData, meta in
 
 	if v, ok := d.GetOk("engine_version"); ok {
 		input.EngineVersion = aws.String(v.(string))
+	} else {
+		input := &neptune.DescribeDBEngineVersionsInput{
+			DefaultOnly: aws.Bool(true),
+			Engine:      input.Engine,
+		}
+
+		result, err := conn.DescribeDBEngineVersions(input)
+		if err != nil {
+			return fmt.Errorf("error reading Neptune default engine version: %w", err)
+		}
+
+		if len(result.DBEngineVersions) < 1 {
+			return fmt.Errorf("no Neptune default engine version found for engine: %v", aws.StringValue(input.Engine))
+		}
+
+		input.EngineVersion = result.DBEngineVersions[0].EngineVersion
 	}
 
 	if v, ok := d.GetOk("license_model"); ok {
@@ -152,26 +171,24 @@ func dataSourceAwsNeptuneOrderableDbInstanceRead(d *schema.ResourceData, meta in
 		input.Vpc = aws.Bool(v.(bool))
 	}
 
-	log.Printf("[DEBUG] Reading Neptune Orderable DB Instance Options: %v", input)
-
-	var instanceClassResults []*neptune.OrderableDBInstanceOption
-	err := conn.DescribeOrderableDBInstanceOptionsPages(input, func(resp *neptune.DescribeOrderableDBInstanceOptionsOutput, lastPage bool) bool {
-		for _, instanceOption := range resp.OrderableDBInstanceOptions {
-			if instanceOption == nil {
-				continue
-			}
-
-			instanceClassResults = append(instanceClassResults, instanceOption)
-		}
-		return !lastPage
-	})
-
+	instanceClassResults, err := dataSourceAwsNeptuneOrderableDbInstance_instanceClasses(input, meta)
 	if err != nil {
 		return fmt.Errorf("error reading Neptune orderable DB instance options: %w", err)
 	}
 
 	if len(instanceClassResults) == 0 {
-		return fmt.Errorf("no Neptune Orderable DB Instance options found matching criteria; try different search")
+		if _, ok := d.GetOk("engine_version"); !ok {
+			input.EngineVersion = nil
+			instanceClassResults, err = dataSourceAwsNeptuneOrderableDbInstance_instanceClasses(input, meta)
+
+			if err != nil {
+				return fmt.Errorf("error reading Neptune orderable DB instance options: %w", err)
+			}
+		}
+
+		if len(instanceClassResults) == 0 {
+			return fmt.Errorf("no Neptune Orderable DB Instance options found matching criteria; try different search")
+		}
 	}
 
 	// preferred classes
@@ -239,4 +256,27 @@ func dataSourceAwsNeptuneOrderableDbInstanceRead(d *schema.ResourceData, meta in
 	d.Set("vpc", found.Vpc)
 
 	return nil
+}
+
+func dataSourceAwsNeptuneOrderableDbInstance_instanceClasses(input *neptune.DescribeOrderableDBInstanceOptionsInput, meta interface{}) ([]*neptune.OrderableDBInstanceOption, error) {
+	conn := meta.(*AWSClient).neptuneconn
+	log.Printf("[DEBUG] Reading Neptune Orderable DB Instance Classes: %v", input)
+
+	var instanceClassResults []*neptune.OrderableDBInstanceOption
+	err := conn.DescribeOrderableDBInstanceOptionsPages(input, func(resp *neptune.DescribeOrderableDBInstanceOptionsOutput, lastPage bool) bool {
+		for _, instanceOption := range resp.OrderableDBInstanceOptions {
+			if instanceOption == nil {
+				continue
+			}
+
+			instanceClassResults = append(instanceClassResults, instanceOption)
+		}
+		return !lastPage
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return instanceClassResults, nil
 }
