@@ -25,18 +25,18 @@ func dataSourceAwsRdsOrderableDbInstance() *schema.Resource {
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 
-			"instance_class": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-
 			"engine": {
 				Type:     schema.TypeString,
 				Required: true,
 			},
 
 			"engine_version": {
+				Type:     schema.TypeString,
+				Optional: true,
+				Computed: true,
+			},
+
+			"instance_class": {
 				Type:     schema.TypeString,
 				Optional: true,
 				Computed: true,
@@ -88,13 +88,13 @@ func dataSourceAwsRdsOrderableDbInstance() *schema.Resource {
 				Computed: true,
 			},
 
-			"preferred_engine_versions": {
+			"preferred_instance_classes": {
 				Type:     schema.TypeList,
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 
-			"preferred_instance_classes": {
+			"preferred_engine_versions": {
 				Type:     schema.TypeList,
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
@@ -195,6 +195,28 @@ func dataSourceAwsRdsOrderableDbInstanceRead(d *schema.ResourceData, meta interf
 		input.EngineVersion = aws.String(v.(string))
 	}
 
+	usedDefaultVersion := false
+	if _, ok := d.GetOk("engine_version"); !ok {
+		if _, ok := d.GetOk("preferred_engine_versions"); !ok {
+			input := &rds.DescribeDBEngineVersionsInput{
+				DefaultOnly: aws.Bool(true),
+				Engine:      input.Engine,
+			}
+
+			result, err := conn.DescribeDBEngineVersions(input)
+			if err != nil {
+				return fmt.Errorf("error reading RDS default engine version: %w", err)
+			}
+
+			if len(result.DBEngineVersions) < 1 {
+				return fmt.Errorf("no RDS default engine version found for engine: %v", aws.StringValue(input.Engine))
+			}
+
+			input.EngineVersion = result.DBEngineVersions[0].EngineVersion
+			usedDefaultVersion = true
+		}
+	}
+
 	if v, ok := d.GetOk("license_model"); ok {
 		input.LicenseModel = aws.String(v.(string))
 	}
@@ -203,80 +225,24 @@ func dataSourceAwsRdsOrderableDbInstanceRead(d *schema.ResourceData, meta interf
 		input.Vpc = aws.Bool(v.(bool))
 	}
 
-	log.Printf("[DEBUG] Reading RDS Orderable DB Instance Options: %v", input)
-	var instanceClassResults []*rds.OrderableDBInstanceOption
-
-	err := conn.DescribeOrderableDBInstanceOptionsPages(input, func(resp *rds.DescribeOrderableDBInstanceOptionsOutput, lastPage bool) bool {
-		for _, instanceOption := range resp.OrderableDBInstanceOptions {
-			if instanceOption == nil {
-				continue
-			}
-
-			if v, ok := d.GetOk("storage_type"); ok {
-				if aws.StringValue(instanceOption.StorageType) != v.(string) {
-					continue
-				}
-			}
-
-			if v, ok := d.GetOk("supports_enhanced_monitoring"); ok {
-				if aws.BoolValue(instanceOption.SupportsEnhancedMonitoring) != v.(bool) {
-					continue
-				}
-			}
-
-			if v, ok := d.GetOk("supports_global_databases"); ok {
-				if aws.BoolValue(instanceOption.SupportsGlobalDatabases) != v.(bool) {
-					continue
-				}
-			}
-
-			if v, ok := d.GetOk("supports_iam_database_authentication"); ok {
-				if aws.BoolValue(instanceOption.SupportsIAMDatabaseAuthentication) != v.(bool) {
-					continue
-				}
-			}
-
-			if v, ok := d.GetOk("supports_iops"); ok {
-				if aws.BoolValue(instanceOption.SupportsIops) != v.(bool) {
-					continue
-				}
-			}
-
-			if v, ok := d.GetOk("supports_kerberos_authentication"); ok {
-				if aws.BoolValue(instanceOption.SupportsKerberosAuthentication) != v.(bool) {
-					continue
-				}
-			}
-
-			if v, ok := d.GetOk("supports_performance_insights"); ok {
-				if aws.BoolValue(instanceOption.SupportsPerformanceInsights) != v.(bool) {
-					continue
-				}
-			}
-
-			if v, ok := d.GetOk("supports_storage_autoscaling"); ok {
-				if aws.BoolValue(instanceOption.SupportsStorageAutoscaling) != v.(bool) {
-					continue
-				}
-			}
-
-			if v, ok := d.GetOk("supports_storage_encryption"); ok {
-				if aws.BoolValue(instanceOption.SupportsStorageEncryption) != v.(bool) {
-					continue
-				}
-			}
-
-			instanceClassResults = append(instanceClassResults, instanceOption)
-		}
-		return !lastPage
-	})
-
+	instanceClassResults, err := dataSourceAwsRdsOrderableDbInstance_instanceClasses(input, d, meta)
 	if err != nil {
 		return fmt.Errorf("error reading RDS orderable DB instance options: %w", err)
 	}
 
 	if len(instanceClassResults) == 0 {
-		return fmt.Errorf("no RDS Orderable DB Instance options found matching criteria; try different search")
+		if usedDefaultVersion {
+			input.EngineVersion = nil
+			instanceClassResults, err = dataSourceAwsRdsOrderableDbInstance_instanceClasses(input, d, meta)
+
+			if err != nil {
+				return fmt.Errorf("error reading Neptune orderable DB instance options: %w", err)
+			}
+		}
+
+		if len(instanceClassResults) == 0 {
+			return fmt.Errorf("no RDS Orderable DB Instance options found matching criteria; try different search")
+		}
 	}
 
 	// preferred classes/versions
@@ -403,4 +369,81 @@ func dataSourceAwsRdsOrderableDbInstanceRead(d *schema.ResourceData, meta interf
 	d.Set("vpc", found.Vpc)
 
 	return nil
+}
+
+func dataSourceAwsRdsOrderableDbInstance_instanceClasses(input *rds.DescribeOrderableDBInstanceOptionsInput, d *schema.ResourceData, meta interface{}) ([]*rds.OrderableDBInstanceOption, error) {
+	conn := meta.(*AWSClient).rdsconn
+	log.Printf("[DEBUG] Reading RDS Orderable DB Instance Options: %v", input)
+
+	var instanceClassResults []*rds.OrderableDBInstanceOption
+	err := conn.DescribeOrderableDBInstanceOptionsPages(input, func(resp *rds.DescribeOrderableDBInstanceOptionsOutput, lastPage bool) bool {
+		for _, instanceOption := range resp.OrderableDBInstanceOptions {
+			if instanceOption == nil {
+				continue
+			}
+
+			if v, ok := d.GetOk("storage_type"); ok {
+				if aws.StringValue(instanceOption.StorageType) != v.(string) {
+					continue
+				}
+			}
+
+			if v, ok := d.GetOk("supports_enhanced_monitoring"); ok {
+				if aws.BoolValue(instanceOption.SupportsEnhancedMonitoring) != v.(bool) {
+					continue
+				}
+			}
+
+			if v, ok := d.GetOk("supports_global_databases"); ok {
+				if aws.BoolValue(instanceOption.SupportsGlobalDatabases) != v.(bool) {
+					continue
+				}
+			}
+
+			if v, ok := d.GetOk("supports_iam_database_authentication"); ok {
+				if aws.BoolValue(instanceOption.SupportsIAMDatabaseAuthentication) != v.(bool) {
+					continue
+				}
+			}
+
+			if v, ok := d.GetOk("supports_iops"); ok {
+				if aws.BoolValue(instanceOption.SupportsIops) != v.(bool) {
+					continue
+				}
+			}
+
+			if v, ok := d.GetOk("supports_kerberos_authentication"); ok {
+				if aws.BoolValue(instanceOption.SupportsKerberosAuthentication) != v.(bool) {
+					continue
+				}
+			}
+
+			if v, ok := d.GetOk("supports_performance_insights"); ok {
+				if aws.BoolValue(instanceOption.SupportsPerformanceInsights) != v.(bool) {
+					continue
+				}
+			}
+
+			if v, ok := d.GetOk("supports_storage_autoscaling"); ok {
+				if aws.BoolValue(instanceOption.SupportsStorageAutoscaling) != v.(bool) {
+					continue
+				}
+			}
+
+			if v, ok := d.GetOk("supports_storage_encryption"); ok {
+				if aws.BoolValue(instanceOption.SupportsStorageEncryption) != v.(bool) {
+					continue
+				}
+			}
+
+			instanceClassResults = append(instanceClassResults, instanceOption)
+		}
+		return !lastPage
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return instanceClassResults, nil
 }

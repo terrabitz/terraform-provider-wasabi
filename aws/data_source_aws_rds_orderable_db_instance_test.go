@@ -225,6 +225,24 @@ func TestAccAWSRdsOrderableDbInstanceDataSource_supportsStorageEncryption(t *tes
 	})
 }
 
+func TestAccAWSRdsOrderableDbInstanceDataSource_defaultOnly(t *testing.T) {
+	dataSourceName := "data.aws_rds_orderable_db_instance.test"
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t); testAccPreCheckAWSRdsOrderableDbInstance(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: nil,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSRdsOrderableDbInstanceDataSourceConfig_defaultOnly(),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttrSet(dataSourceName, "engine_version"),
+				),
+			},
+		},
+	})
+}
+
 func testAccPreCheckAWSRdsOrderableDbInstance(t *testing.T) {
 	conn := testAccProvider.Meta().(*AWSClient).rdsconn
 
@@ -403,6 +421,17 @@ data "aws_rds_orderable_db_instance" "test" {
   supports_storage_encryption = true
 
   preferred_engine_versions  = ["5.6.35", "5.6.41", "5.6.44"]
+  preferred_instance_classes = ["db.t2.small", "db.t3.medium", "db.t3.large"]
+}
+`)
+}
+
+func testAccAWSRdsOrderableDbInstanceDataSourceConfig_defaultOnly() string {
+	return fmt.Sprintf(`
+data "aws_rds_orderable_db_instance" "test" {
+  engine                     = "mysql"
+  license_model              = "general-public-license"
+  storage_type               = "standard"
   preferred_instance_classes = ["db.t2.small", "db.t3.medium", "db.t3.large"]
 }
 `)
