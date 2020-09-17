@@ -59,6 +59,28 @@ func TestAccAWSDocdbOrderableDbInstanceDataSource_preferred(t *testing.T) {
 	})
 }
 
+func TestAccAWSDocdbOrderableDbInstanceDataSource_defaultOnly(t *testing.T) {
+	dataSourceName := "data.aws_docdb_orderable_db_instance.test"
+	preferredOption := "db.r5.large"
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t); testAccPreCheckAWSDocdbOrderableDbInstance(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: nil,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSDocdbOrderableDbInstanceDataSourceDefaultOnlyConfig(preferredOption),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(dataSourceName, "engine", "docdb"),
+					resource.TestCheckResourceAttrSet(dataSourceName, "engine_version"),
+					resource.TestCheckResourceAttr(dataSourceName, "license_model", "na"),
+					resource.TestCheckResourceAttr(dataSourceName, "instance_class", preferredOption),
+				),
+			},
+		},
+	})
+}
+
 func testAccPreCheckAWSDocdbOrderableDbInstance(t *testing.T) {
 	conn := testAccProvider.Meta().(*AWSClient).docdbconn
 
@@ -102,4 +124,16 @@ data "aws_docdb_orderable_db_instance" "test" {
   ]
 }
 `, engine, version, license, preferredOption)
+}
+
+func testAccAWSDocdbOrderableDbInstanceDataSourceDefaultOnlyConfig(preferredOption string) string {
+	return fmt.Sprintf(`
+data "aws_docdb_orderable_db_instance" "test" {
+  preferred_instance_classes = [
+    "db.xyz.xlarge",
+    %q,
+    "db.t3.small",
+  ]
+}
+`, preferredOption)
 }

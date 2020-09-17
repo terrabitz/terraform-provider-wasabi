@@ -19,15 +19,10 @@ func dataSourceAwsDocdbOrderableDbInstance() *schema.Resource {
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 
-			"instance_class": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-
 			"engine": {
 				Type:     schema.TypeString,
-				Required: true,
+				Optional: true,
+				Default:  "docdb",
 			},
 
 			"engine_version": {
@@ -36,16 +31,24 @@ func dataSourceAwsDocdbOrderableDbInstance() *schema.Resource {
 				Computed: true,
 			},
 
+			"instance_class": {
+				Type:          schema.TypeString,
+				Optional:      true,
+				Computed:      true,
+				ConflictsWith: []string{"preferred_instance_classes"},
+			},
+
 			"license_model": {
 				Type:     schema.TypeString,
 				Optional: true,
-				Computed: true,
+				Default:  "na",
 			},
 
 			"preferred_instance_classes": {
-				Type:     schema.TypeList,
-				Optional: true,
-				Elem:     &schema.Schema{Type: schema.TypeString},
+				Type:          schema.TypeList,
+				Optional:      true,
+				Elem:          &schema.Schema{Type: schema.TypeString},
+				ConflictsWith: []string{"instance_class"},
 			},
 
 			"vpc": {
@@ -72,6 +75,22 @@ func dataSourceAwsDocdbOrderableDbInstanceRead(d *schema.ResourceData, meta inte
 
 	if v, ok := d.GetOk("engine_version"); ok {
 		input.EngineVersion = aws.String(v.(string))
+	} else {
+		input := &docdb.DescribeDBEngineVersionsInput{
+			DefaultOnly: aws.Bool(true),
+			Engine:      input.Engine,
+		}
+
+		result, err := conn.DescribeDBEngineVersions(input)
+		if err != nil {
+			return fmt.Errorf("error reading DocDB default engine version: %w", err)
+		}
+
+		if len(result.DBEngineVersions) < 1 {
+			return fmt.Errorf("no DocDB default engine version found for engine: %v", aws.StringValue(input.Engine))
+		}
+
+		input.EngineVersion = result.DBEngineVersions[0].EngineVersion
 	}
 
 	if v, ok := d.GetOk("license_model"); ok {
@@ -82,26 +101,24 @@ func dataSourceAwsDocdbOrderableDbInstanceRead(d *schema.ResourceData, meta inte
 		input.Vpc = aws.Bool(v.(bool))
 	}
 
-	log.Printf("[DEBUG] Reading DocDB Orderable DB Instance Options: %v", input)
-	var instanceClassResults []*docdb.OrderableDBInstanceOption
-
-	err := conn.DescribeOrderableDBInstanceOptionsPages(input, func(resp *docdb.DescribeOrderableDBInstanceOptionsOutput, lastPage bool) bool {
-		for _, instanceOption := range resp.OrderableDBInstanceOptions {
-			if instanceOption == nil {
-				continue
-			}
-
-			instanceClassResults = append(instanceClassResults, instanceOption)
-		}
-		return !lastPage
-	})
-
+	instanceClassResults, err := dataSourceAwsDocDBOrderableDbInstance_instanceClasses(input, meta)
 	if err != nil {
 		return fmt.Errorf("error reading DocDB orderable DB instance options: %w", err)
 	}
 
 	if len(instanceClassResults) == 0 {
-		return fmt.Errorf("no DocDB Orderable DB Instance options found matching criteria; try different search")
+		if _, ok := d.GetOk("engine_version"); !ok {
+			input.EngineVersion = nil
+			instanceClassResults, err = dataSourceAwsDocDBOrderableDbInstance_instanceClasses(input, meta)
+
+			if err != nil {
+				return fmt.Errorf("error reading DocDB orderable DB instance options: %w", err)
+			}
+		}
+
+		if len(instanceClassResults) == 0 {
+			return fmt.Errorf("no DocDB Orderable DB Instance options found matching criteria; try different search")
+		}
 	}
 
 	// preferred classes
@@ -155,4 +172,27 @@ func dataSourceAwsDocdbOrderableDbInstanceRead(d *schema.ResourceData, meta inte
 	d.Set("vpc", found.Vpc)
 
 	return nil
+}
+
+func dataSourceAwsDocDBOrderableDbInstance_instanceClasses(input *docdb.DescribeOrderableDBInstanceOptionsInput, meta interface{}) ([]*docdb.OrderableDBInstanceOption, error) {
+	conn := meta.(*AWSClient).docdbconn
+	log.Printf("[DEBUG] Reading DocDB Orderable DB Instance Classes: %v", input)
+
+	var instanceClassResults []*docdb.OrderableDBInstanceOption
+	err := conn.DescribeOrderableDBInstanceOptionsPages(input, func(resp *docdb.DescribeOrderableDBInstanceOptionsOutput, lastPage bool) bool {
+		for _, instanceOption := range resp.OrderableDBInstanceOptions {
+			if instanceOption == nil {
+				continue
+			}
+
+			instanceClassResults = append(instanceClassResults, instanceOption)
+		}
+		return !lastPage
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return instanceClassResults, nil
 }
