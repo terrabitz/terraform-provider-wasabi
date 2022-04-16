@@ -4,7 +4,7 @@ package main
 
 // Run the docs generation tool, check its repository for more information on how it works and how docs
 // can be customized.
-//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@latest
+//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs
 
 import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/plugin"
