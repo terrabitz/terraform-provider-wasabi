@@ -11,9 +11,10 @@ import (
 
 	"github.com/hashicorp/go-multierror"
 
+	"github.com/hashicorp/terraform-plugin-go/tfprotov5"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/configs/configschema"
-	grpcpluginctx "github.com/hashicorp/terraform-plugin-sdk/v2/internal/helper/plugin/context"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/logging"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/meta"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
@@ -33,7 +34,7 @@ var ReservedProviderFields = []string{
 // Deprecated: The use of a global context is discouraged. Please use the new
 // context aware CRUD methods.
 func StopContext(ctx context.Context) (context.Context, bool) {
-	stopContext, ok := ctx.Value(grpcpluginctx.StopContextKey).(context.Context)
+	stopContext, ok := ctx.Value(StopContextKey).(context.Context)
 	return stopContext, ok
 }
 
@@ -89,6 +90,9 @@ type Provider struct {
 	// receives a context.Context that will cancel when Terraform sends a
 	// cancellation signal. This function can yield Diagnostics.
 	ConfigureContextFunc ConfigureContextFunc
+
+	// configured is enabled after a Configure() call
+	configured bool
 
 	meta interface{}
 
@@ -261,6 +265,10 @@ func (p *Provider) Configure(ctx context.Context, c *terraform.ResourceConfig) d
 		return nil
 	}
 
+	if p.configured {
+		logging.HelperSchemaWarn(ctx, "Previously configured provider being re-configured. This can cause issues in concurrent testing if the configurations are not equal.")
+	}
+
 	sm := schemaMap(p.Schema)
 
 	// Get a ResourceData for this configuration. To do this, we actually
@@ -282,15 +290,23 @@ func (p *Provider) Configure(ctx context.Context, c *terraform.ResourceConfig) d
 		}
 		p.meta = meta
 	}
+
+	var diags diag.Diagnostics
+
 	if p.ConfigureContextFunc != nil {
-		meta, diags := p.ConfigureContextFunc(ctx, data)
+		meta, configureDiags := p.ConfigureContextFunc(ctx, data)
+		diags = append(diags, configureDiags...)
+
 		if diags.HasError() {
 			return diags
 		}
+
 		p.meta = meta
 	}
 
-	return nil
+	p.configured = true
+
+	return diags
 }
 
 // Resources returns all the available resource types that this provider
@@ -363,11 +379,15 @@ func (p *Provider) ImportState(
 	results := []*ResourceData{data}
 	if r.Importer.State != nil || r.Importer.StateContext != nil {
 		var err error
+		logging.HelperSchemaTrace(ctx, "Calling downstream")
+
 		if r.Importer.StateContext != nil {
 			results, err = r.Importer.StateContext(ctx, data, p.meta)
 		} else {
 			results, err = r.Importer.State(data, p.meta)
 		}
+		logging.HelperSchemaTrace(ctx, "Called downstream")
+
 		if err != nil {
 			return nil, err
 		}
@@ -376,6 +396,21 @@ func (p *Provider) ImportState(
 	// Convert the results to InstanceState values and return it
 	states := make([]*terraform.InstanceState, len(results))
 	for i, r := range results {
+		if r == nil {
+			return nil, fmt.Errorf("The provider returned a missing resource during ImportResourceState. " +
+				"This is generally a bug in the resource implementation for import. " +
+				"Resource import code should return an error for missing resources and skip returning a missing or empty ResourceData. " +
+				"Please report this to the provider developers.")
+		}
+
+		if r.Id() == "" {
+			return nil, fmt.Errorf("The provider returned a resource missing an identifier during ImportResourceState. " +
+				"This is generally a bug in the resource implementation for import. " +
+				"Resource import code should not call d.SetId(\"\") or create an empty ResourceData. " +
+				"If the resource is missing, instead return an error. " +
+				"Please report this to the provider developers.")
+		}
+
 		states[i] = r.State()
 	}
 
@@ -383,10 +418,10 @@ func (p *Provider) ImportState(
 	// isn't obvious so we circumvent that with a friendlier error.
 	for _, s := range states {
 		if s == nil {
-			return nil, fmt.Errorf(
-				"nil entry in ImportState results. This is always a bug with\n" +
-					"the resource that is being imported. Please report this as\n" +
-					"a bug to Terraform.")
+			return nil, fmt.Errorf("The provider returned a missing resource during ImportResourceState. " +
+				"This is generally a bug in the resource implementation for import. " +
+				"Resource import code should return an error for missing resources. " +
+				"Please report this to the provider developers.")
 		}
 	}
 
@@ -466,4 +501,9 @@ func (p *Provider) UserAgent(name, version string) string {
 	}
 
 	return ua
+}
+
+// GRPCProvider returns a gRPC server, for use with terraform-plugin-mux.
+func (p *Provider) GRPCProvider() tfprotov5.ProviderServer {
+	return NewGRPCProviderServer(p)
 }
