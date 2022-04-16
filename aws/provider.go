@@ -19,15 +19,15 @@ func Provider() *schema.Provider {
 			"access_key": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				Default:     "",
 				Description: descriptions["access_key"],
+				DefaultFunc: schema.EnvDefaultFunc("WASABI_ACCESS_KEY", nil),
 			},
 
 			"secret_key": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				Default:     "",
 				Description: descriptions["secret_key"],
+				DefaultFunc: schema.EnvDefaultFunc("WASABI_SECRET_KEY", nil),
 			},
 
 			"profile": {
@@ -54,12 +54,9 @@ func Provider() *schema.Provider {
 			},
 
 			"region": {
-				Type:     schema.TypeString,
-				Required: true,
-				DefaultFunc: schema.MultiEnvDefaultFunc([]string{
-					"AWS_REGION",
-					"AWS_DEFAULT_REGION",
-				}, nil),
+				Type:         schema.TypeString,
+				Required:     true,
+				DefaultFunc:  schema.EnvDefaultFunc("WASABI_REGION", nil),
 				Description:  descriptions["region"],
 				InputDefault: "us-east-1",
 			},
