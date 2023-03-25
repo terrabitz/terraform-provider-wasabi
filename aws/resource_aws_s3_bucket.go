@@ -2,7 +2,6 @@ package aws
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,9 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
-	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/structure"
@@ -781,13 +778,14 @@ func resourceAwsS3BucketRead(d *schema.ResourceData, meta interface{}) error {
 
 	// Add the region as an attribute
 	discoveredRegion, err := retryOnAwsCode("NotFound", func() (interface{}, error) {
-		return s3manager.GetBucketRegionWithClient(context.Background(), s3conn, d.Id(), func(r *request.Request) {
-			// By default, GetBucketRegion forces virtual host addressing, which
-			// is not compatible with many non-AWS implementations. Instead, pass
-			// the provider s3_force_path_style configuration, which defaults to
-			// false, but allows override.
-			r.Config.S3ForcePathStyle = s3conn.Config.S3ForcePathStyle
+		res, err := s3conn.GetBucketLocation(&s3.GetBucketLocationInput{
+			Bucket: aws.String(d.Id()),
 		})
+		if err != nil {
+			return nil, err
+		}
+
+		return s3.NormalizeBucketLocation(*res.LocationConstraint), nil
 	})
 	if err != nil {
 		return fmt.Errorf("error getting S3 Bucket location: %s", err)
